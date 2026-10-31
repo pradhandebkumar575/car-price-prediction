@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import requests
 
 from sklearn.model_selection import train_test_split
 from sklearn.compose import ColumnTransformer
@@ -23,7 +24,73 @@ st.set_page_config(
 st.title("🚗 Car Price Prediction System")
 st.write("Machine Learning Based Car Price Prediction")
 
+# =========================================================
+# CAR IMAGE FUNCTION
+# =========================================================
 
+def show_car_image(brand, model):
+
+    st.subheader(f"🚘 {brand} {model}")
+
+    search_query = f"{brand} {model} car"
+
+    try:
+        response = requests.get(
+            "https://commons.wikimedia.org/w/api.php",
+            params={
+                "action": "query",
+                "generator": "search",
+                "gsrsearch": search_query,
+                "gsrnamespace": 6,
+                "gsrlimit": 10,
+                "prop": "imageinfo",
+                "iiprop": "url",
+                "iiurlwidth": 700,
+                "format": "json"
+            },
+            headers={
+                "User-Agent": "CarPricePredictionApp/1.0"
+            },
+            timeout=10
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        pages = data.get("query", {}).get("pages", {})
+
+        image_url = None
+
+        for page in pages.values():
+
+            image_info = page.get("imageinfo", [])
+
+            if image_info:
+                image_url = image_info[0].get(
+                    "thumburl",
+                    image_info[0].get("url")
+                )
+
+                if image_url:
+                    break
+
+        if image_url:
+
+            st.image(
+                image_url,
+                caption=f"{brand} {model}",
+                use_container_width=True
+            )
+
+        else:
+            st.info("No image found for this car.")
+
+    except requests.RequestException:
+
+        st.warning(
+            "No image found for this car. Please check your internet connection."
+        )
 # =========================================================
 # LOAD DATASET
 # =========================================================
@@ -667,62 +734,25 @@ if st.button(
 
     try:
 
-        # -------------------------------------------------
-        # CREATE USER INPUT
-        # -------------------------------------------------
-
         input_data = {
-
             "Brand": selected_brand,
-
             "Model": selected_model,
-
             "Year": year_value,
-
             "Kms_Driven": kms_value,
-
             "Fuel_Type": fuel_value,
-
             "Transmission": transmission_value,
-
             "Owner": owner_value,
-
             "Mileage_kmpl": mileage_value,
-
             "Engine_cc": engine_value
         }
 
+        input_df = pd.DataFrame([input_data])
 
-        # -------------------------------------------------
-        # DATAFRAME
-        # -------------------------------------------------
+        input_df = input_df[feature_columns]
 
-        input_df = pd.DataFrame(
-            [input_data]
-        )
+        predicted_price = pipeline.predict(input_df)[0]
 
-
-        # -------------------------------------------------
-        # SAME COLUMN ORDER AS TRAINING
-        # -------------------------------------------------
-
-        input_df = input_df[
-            feature_columns
-        ]
-
-
-        # -------------------------------------------------
-        # PREDICT
-        # -------------------------------------------------
-
-        predicted_price = pipeline.predict(
-            input_df
-        )[0]
-
-
-        # -------------------------------------------------
-        # RESULT
-        # -------------------------------------------------
+        st.session_state["predicted_car_price"] = float(predicted_price)
 
         st.success(
             f"### 💰 Estimated Car Price: ₹ {predicted_price:.2f} Lakh"
@@ -732,6 +762,11 @@ if st.button(
             "Price predicted using Random Forest Machine Learning model."
         )
 
+        # Show selected car image
+        show_car_image(
+            selected_brand,
+            selected_model
+        )
 
     except Exception as e:
 
@@ -770,27 +805,7 @@ with col3:
 
 
 
-# =========================================================
-# ACTUAL VS PREDICTED
-# =========================================================
 
-st.markdown("---")
-
-st.subheader(
-    "📊 Actual vs Predicted Price"
-)
-
-comparison = pd.DataFrame(
-    {
-        "Actual Price": y_test.values,
-
-        "Predicted Price": predictions
-    }
-)
-
-st.line_chart(
-    comparison
-)
 
 
 # =========================================================
@@ -802,3 +817,248 @@ st.markdown("---")
 st.caption(
     "Car Price Prediction | Machine Learning Project | Random Forest Regression"
 )
+# ```python
+# =========================================================
+# EMI CALCULATOR
+# =========================================================
+
+st.markdown("---")
+st.header("💰 Car Loan EMI Calculator")
+st.write("Debug - Saved price:", st.session_state.get("predicted_car_price", "Not saved"))
+if "predicted_car_price" in st.session_state:
+
+    car_price = float(st.session_state["predicted_car_price"])
+
+    st.success("Using the price from your latest prediction.")
+    st.metric(
+        "🚗 Predicted Car Price",
+        f"₹ {car_price:.2f} Lakh"
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        down_payment = st.number_input(
+            "Down Payment (₹ Lakh)",
+            min_value=0.0,
+            value=0.0,
+            step=0.5,
+            key="emi_down_payment"
+        )
+
+    with col2:
+        interest_rate = st.number_input(
+            "Annual Interest Rate (%)",
+            min_value=0.0,
+            value=9.0,
+            step=0.5,
+            key="emi_interest_rate"
+        )
+
+    loan_years = st.selectbox(
+        "Loan Period (Years)",
+        [1, 2, 3, 4, 5, 6, 7],
+        index=4,
+        key="emi_loan_years"
+    )
+
+    if car_price <= 0:
+        st.warning("Predicted car price must be greater than zero.")
+
+    elif down_payment >= car_price:
+        st.warning("Down payment must be less than the car price.")
+
+    else:
+        loan_amount = (car_price - down_payment) * 100000
+        monthly_rate = interest_rate / 1200
+        months = loan_years * 12
+
+        if monthly_rate > 0:
+            emi = (
+                loan_amount
+                * monthly_rate
+                * (1 + monthly_rate) ** months
+                / ((1 + monthly_rate) ** months - 1)
+            )
+        else:
+            emi = loan_amount / months
+
+        total_payment = emi * months
+        total_interest = total_payment - loan_amount
+
+        st.subheader("📊 EMI Results")
+
+        col1, col2, col3 = st.columns(3)
+
+        col1.metric("Monthly EMI", f"₹ {emi:,.0f}")
+        col2.metric("Total Interest", f"₹ {total_interest:,.0f}")
+        col3.metric("Loan Amount", f"₹ {loan_amount:,.0f}")
+
+        st.info(f"Total Repayment: ₹ {total_payment:,.0f}")
+
+        st.caption(
+            "EMI is an estimate. Actual charges may vary "
+            "depending on the bank and loan conditions."
+        )
+
+else:
+    st.info(
+        "Please select a car and click 'Predict Car Price' first. "
+        "The predicted price will appear here automatically."
+    )
+# =========================================================
+# ACTUAL VS PREDICTED PRICE
+# =========================================================
+
+st.markdown("---")
+st.header("📊 Actual vs Predicted Price")
+
+comparison = pd.DataFrame({
+    "Actual Price": y_test.values,
+    "Predicted Price": predictions
+})
+
+st.line_chart(comparison)
+
+
+
+
+ # =========================================================
+# COMPARE TWO CARS
+# =========================================================
+
+st.markdown("---")
+st.header("🚗 Compare Two Cars")
+
+st.write(
+    "Select two cars to compare their features "
+    "and estimated prices."
+)
+
+# Create car options from the existing dataset
+car_options = list(range(len(X)))
+
+def car_label(i):
+    car = X.iloc[i]
+    return (
+        f"{car['Brand']} {car['Model']} "
+        f"({int(car['Year'])})"
+    )
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("🚘 Car 1")
+
+    car1_index = st.selectbox(
+        "Select First Car",
+        car_options,
+        format_func=car_label,
+        key="compare_car1"
+    )
+
+with col2:
+    st.subheader("🚙 Car 2")
+
+    car2_index = st.selectbox(
+        "Select Second Car",
+        car_options,
+        index=min(1, len(car_options) - 1),
+        format_func=car_label,
+        key="compare_car2"
+    )
+
+if st.button(
+    "🔍 Compare Cars",
+    use_container_width=True,
+    key="compare_button"
+):
+
+    if car1_index == car2_index:
+        st.warning("Please select two different dataset records.")
+
+    else:
+        car1 = X.iloc[[car1_index]][feature_columns]
+        car2 = X.iloc[[car2_index]][feature_columns]
+
+        price1 = float(pipeline.predict(car1)[0])
+        price2 = float(pipeline.predict(car2)[0])
+
+        st.markdown("---")
+        st.subheader("📊 Comparison Results")
+
+        result1, result2 = st.columns(2)
+
+        with result1:
+            st.markdown(f"### 🚘 {car_label(car1_index)}")
+
+            st.metric(
+                "Estimated Price",
+                f"₹{price1:.2f} Lakh"
+            )
+
+            st.write(
+                f"**Brand:** {X.iloc[car1_index]['Brand']}"
+            )
+            st.write(
+                f"**Year:** {int(X.iloc[car1_index]['Year'])}"
+            )
+            st.write(
+                f"**Fuel:** {X.iloc[car1_index]['Fuel_Type']}"
+            )
+            st.write(
+                f"**Transmission:** "
+                f"{X.iloc[car1_index]['Transmission']}"
+            )
+            st.write(
+                f"**Kilometers Driven:** "
+                f"{X.iloc[car1_index]['Kms_Driven']:,.0f}"
+            )
+
+        with result2:
+            st.markdown(f"### 🚙 {car_label(car2_index)}")
+
+            st.metric(
+                "Estimated Price",
+                f"₹{price2:.2f} Lakh"
+            )
+
+            st.write(
+                f"**Brand:** {X.iloc[car2_index]['Brand']}"
+            )
+            st.write(
+                f"**Year:** {int(X.iloc[car2_index]['Year'])}"
+            )
+            st.write(
+                f"**Fuel:** {X.iloc[car2_index]['Fuel_Type']}"
+            )
+            st.write(
+                f"**Transmission:** "
+                f"{X.iloc[car2_index]['Transmission']}"
+            )
+            st.write(
+                f"**Kilometers Driven:** "
+                f"{X.iloc[car2_index]['Kms_Driven']:,.0f}"
+            )
+
+        st.markdown("---")
+
+        difference = abs(price1 - price2)
+
+        st.metric(
+            "Price Difference",
+            f"₹{difference:.2f} Lakh"
+        )
+
+        if price1 < price2:
+            st.success(
+                f"{car_label(car1_index)} has the lower "
+                "estimated price."
+            )
+        elif price2 < price1:
+            st.success(
+                f"{car_label(car2_index)} has the lower "
+                "estimated price."
+            )
+        else:
+            st.info("Both cars have the same estimated price.")
