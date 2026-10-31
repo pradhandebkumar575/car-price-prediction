@@ -494,18 +494,14 @@ if len(selected_car) > 0:
     with col2:
 
         engine_value = st.number_input(
-            "⚙️ Engine (cc)",
-
-            min_value=500.0,
-
-            max_value=10000.0,
-
-            value=float(car["Engine_cc"]),
-
-            step=50.0,
-
-            key="engine_input"
-        )
+    "⚙️ Engine (cc)",
+    min_value=0.0,
+    max_value=10000.0,
+    value=float(car["Engine_cc"]),
+    step=50.0,
+    key=f"engine_{selected_brand}_{selected_model}"
+)
+        
 
 
     # =====================================================
@@ -523,11 +519,16 @@ if len(selected_car) > 0:
 
             max_value=100.0,
 
-            value=float(car["Mileage_kmpl"]),
+            value=max(
+    1.0,
+    float(car["Mileage_kmpl"])
+    if pd.notna(car["Mileage_kmpl"]) and car["Mileage_kmpl"] > 0
+    else float(X["Mileage_kmpl"].median())
+),
 
             step=0.1,
 
-            key="mileage_input"
+            key=f"mileage_{selected_brand}_{selected_model}"
         )
 
 
@@ -585,8 +586,7 @@ if len(selected_car) > 0:
             fuel_options,
 
             index=fuel_index,
-
-            key="fuel_input"
+key=f"fuel_{selected_brand}_{selected_model}"
         )
 
 
@@ -740,20 +740,34 @@ if st.button(
         )
 
 
-# =========================================================
-# DATASET PREVIEW
-# =========================================================
+
+# =================================================
+# DATASET INFORMATION
+# =================================================
 
 st.markdown("---")
+st.subheader("📊 Dataset Information")
 
-st.subheader(
-    "📋 Dataset Preview"
-)
+col1, col2, col3 = st.columns(3)
 
-st.dataframe(
-    df.head(10),
-    use_container_width=True
-)
+with col1:
+    st.metric(
+        "Total Cars",
+        len(df)
+    )
+
+with col2:
+    st.metric(
+        "Total Features",
+        len(X.columns)
+    )
+
+with col3:
+    st.metric(
+        "Training Data",
+        len(X_train)
+    )
+
 
 
 # =========================================================
