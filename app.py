@@ -151,10 +151,9 @@ missing_columns = [
 ]
 
 if missing_columns:
-
-   st.error(
-    f"The following required columns are missing from the CSV: {missing_columns}"
-) 
+    st.error(
+        f"The following required columns are missing from the CSV: {missing_columns}"
+    )
 
     st.write("CSV columns:")
     st.write(df.columns.tolist())
