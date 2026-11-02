@@ -102,7 +102,7 @@ DATA_FILE = os.path.join(APP_DIR, "car_price_dataset_1500.csv")
 try:
     df = pd.read_csv(DATA_FILE)
 except Exception as e:
-    st.error(f"Dataset load korte problem hoyeche: {e}")
+  st.error(f"Error loading dataset: {e}") 
     st.stop()
 
 
@@ -151,9 +151,9 @@ missing_columns = [
 
 if missing_columns:
 
-    st.error(
-        f"CSV-te ei column gulo pawa jayni: {missing_columns}"
-    )
+   st.error(
+    f"The following required columns are missing from the CSV: {missing_columns}"
+) 
 
     st.write("CSV columns:")
     st.write(df.columns.tolist())
@@ -533,11 +533,8 @@ st.subheader(
 )
 
 st.caption(
-    "Model select korar por values automatically ashbe. "
-    "Proyojon hole tumi values change korte parbe."
+    "Some fields are pre-filled based on the dataset. You can modify them if needed."
 )
-
-
 if len(selected_car) > 0:
 
     car = selected_car.iloc[0]
