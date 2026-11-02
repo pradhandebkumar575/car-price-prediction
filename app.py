@@ -2,6 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+import os
+import sqlite3
+from datetime import datetime
 
 from sklearn.model_selection import train_test_split
 from sklearn.compose import ColumnTransformer
@@ -55,15 +58,11 @@ def show_car_image(brand, model):
         )
 
         response.raise_for_status()
-
         data = response.json()
-
         pages = data.get("query", {}).get("pages", {})
-
         image_url = None
 
         for page in pages.values():
-
             image_info = page.get("imageinfo", [])
 
             if image_info:
@@ -76,26 +75,29 @@ def show_car_image(brand, model):
                     break
 
         if image_url:
-
             st.image(
                 image_url,
                 caption=f"{brand} {model}",
                 use_container_width=True
             )
 
+            st.caption(
+                "⚠️ Illustrative Image: This may not be the actual model "
+                "or original photo of the selected car."
+            )
         else:
             st.info("No image found for this car.")
 
     except requests.RequestException:
-
         st.warning(
-            "No image found for this car. Please check your internet connection."
+            "No image found for this car. Please check your internet connections."
         )
 # =========================================================
 # LOAD DATASET
 # =========================================================
 
-DATA_FILE = "car_price_2025_2026_final.csv"
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_FILE = os.path.join(APP_DIR, "car_price_dataset_1500.csv")
 
 try:
     df = pd.read_csv(DATA_FILE)
@@ -136,7 +138,9 @@ required_columns = [
     "Transmission",
     "Owner",
     "Mileage_kmpl",
-    "Engine_cc"
+    "Engine_cc",
+    "City",
+    "Accident_History"
 ]
 
 missing_columns = [
@@ -206,7 +210,9 @@ feature_columns = [
     "Transmission",
     "Owner",
     "Mileage_kmpl",
-    "Engine_cc"
+    "Engine_cc",
+    "City",
+    "Accident_History"
 ]
 
 X = df[feature_columns].copy()
@@ -246,7 +252,9 @@ categorical_columns = [
     "Brand",
     "Model",
     "Fuel_Type",
-    "Transmission"
+    "Transmission",
+    "City",
+    "Accident_History"
 ]
 
 for col in categorical_columns:
@@ -720,6 +728,33 @@ key=f"fuel_{selected_brand}_{selected_model}"
         key="owner_input"
     )
 
+    # CITY
+    city_options = sorted(X["City"].astype(str).str.strip().unique().tolist())
+    city_default = str(car["City"]).strip()
+    city_index = city_options.index(city_default) if city_default in city_options else 0
+    city_value = st.selectbox(
+        "📍 City",
+        city_options,
+        index=city_index,
+        key="city_input"
+    )
+
+    # ACCIDENT HISTORY
+    accident_options = sorted(
+        X["Accident_History"].astype(str).str.strip().unique().tolist()
+    )
+    accident_default = str(car["Accident_History"]).strip()
+    accident_index = (
+        accident_options.index(accident_default)
+        if accident_default in accident_options else 0
+    )
+    accident_value = st.selectbox(
+        "⚠️ Accident History",
+        accident_options,
+        index=accident_index,
+        key="accident_history_input"
+    )
+
 
 # =========================================================
 # PREDICT BUTTON
@@ -743,7 +778,9 @@ if st.button(
             "Transmission": transmission_value,
             "Owner": owner_value,
             "Mileage_kmpl": mileage_value,
-            "Engine_cc": engine_value
+            "Engine_cc": engine_value,
+            "City": city_value,
+            "Accident_History": accident_value
         }
 
         input_df = pd.DataFrame([input_data])
@@ -753,6 +790,45 @@ if st.button(
         predicted_price = pipeline.predict(input_df)[0]
 
         st.session_state["predicted_car_price"] = float(predicted_price)
+
+        # Save each successful prediction permanently in a local SQLite database
+        history_db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prediction_history.db")
+        with sqlite3.connect(history_db) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS predictions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    predicted_at TEXT NOT NULL,
+                    brand TEXT, model TEXT, year INTEGER,
+                    kms_driven REAL, fuel_type TEXT, transmission TEXT,
+                    owner INTEGER, mileage_kmpl REAL, engine_cc REAL,
+                    city TEXT, accident_history TEXT,
+                    predicted_price_lakh REAL
+                )
+            """)
+            # Migrate older databases without deleting existing prediction history.
+            existing_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(predictions)")
+            }
+            if "city" not in existing_cols:
+                conn.execute("ALTER TABLE predictions ADD COLUMN city TEXT")
+            if "accident_history" not in existing_cols:
+                conn.execute("ALTER TABLE predictions ADD COLUMN accident_history TEXT")
+
+            conn.execute("""
+                INSERT INTO predictions
+                (predicted_at, brand, model, year, kms_driven, fuel_type,
+                 transmission, owner, mileage_kmpl, engine_cc, city,
+                 accident_history, predicted_price_lakh)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                selected_brand, selected_model, int(year_value), float(kms_value),
+                str(fuel_value), str(transmission_value), int(owner_value),
+                float(mileage_value), float(engine_value), str(city_value),
+                str(accident_value), float(predicted_price)
+            ))
+            conn.commit()
+
 
         st.success(
             f"### 💰 Estimated Car Price: ₹ {predicted_price:.2f} Lakh"
@@ -1062,3 +1138,574 @@ if st.button(
             )
         else:
             st.info("Both cars have the same estimated price.")
+
+# =========================================================
+# BRAND-WISE MARKET ANALYSIS
+# =========================================================
+
+st.markdown("---")
+st.header("🏷️ Brand-wise Market Analysis")
+st.caption("Dataset-based analysis of listed car prices; this is not a live market-price feed.")
+
+brand_analysis = df.copy()
+brand_analysis[target] = pd.to_numeric(brand_analysis[target], errors="coerce")
+brand_analysis = brand_analysis.dropna(subset=["Brand", target])
+
+if not brand_analysis.empty:
+    brand_summary = (
+        brand_analysis.groupby("Brand")
+        .agg(
+            Average_Price_Lakh=("Present_Price_Lakh", "mean"),
+            Median_Price_Lakh=("Present_Price_Lakh", "median"),
+            Cars_Listed=("Present_Price_Lakh", "size")
+        )
+        .sort_values("Average_Price_Lakh", ascending=False)
+    )
+    brand_options = sorted(brand_analysis["Brand"].astype(str).unique().tolist())
+    selected_analysis_brands = st.multiselect(
+        "Choose brands to compare (leave empty to show top 10)",
+        brand_options,
+        default=[]
+    )
+    if selected_analysis_brands:
+        plot_data = brand_summary.loc[
+            brand_summary.index.astype(str).isin(selected_analysis_brands)
+        ].sort_values("Average_Price_Lakh", ascending=False)
+    else:
+        plot_data = brand_summary.head(10).sort_values("Average_Price_Lakh", ascending=False)
+
+    st.subheader("Average listed price by brand (₹ lakh)")
+    st.bar_chart(plot_data[["Average_Price_Lakh"]])
+    st.subheader("Brand summary")
+    st.dataframe(
+        plot_data.rename(columns={
+            "Average_Price_Lakh": "Average Price (Lakh)",
+            "Median_Price_Lakh": "Median Price (Lakh)",
+            "Cars_Listed": "Cars in Dataset"
+        }).round(2),
+        use_container_width=True
+    )
+else:
+    st.info("No valid brand and price data available for analysis.")
+
+
+# =========================================================
+# PERMANENT PREDICTION HISTORY
+# =========================================================
+
+st.markdown("---")
+st.header("🕘 Prediction History")
+st.caption("History is stored locally in prediction_history.db in the same folder as app.py.")
+
+history_db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prediction_history.db")
+with sqlite3.connect(history_db) as conn:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            predicted_at TEXT NOT NULL,
+            brand TEXT, model TEXT, year INTEGER,
+            kms_driven REAL, fuel_type TEXT, transmission TEXT,
+            owner INTEGER, mileage_kmpl REAL, engine_cc REAL,
+            city TEXT, accident_history TEXT,
+            predicted_price_lakh REAL
+        )
+    """)
+    existing_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(predictions)")
+    }
+    if "city" not in existing_cols:
+        conn.execute("ALTER TABLE predictions ADD COLUMN city TEXT")
+    if "accident_history" not in existing_cols:
+        conn.execute("ALTER TABLE predictions ADD COLUMN accident_history TEXT")
+
+    history_df = pd.read_sql_query(
+        "SELECT predicted_at AS 'Date & Time', brand AS Brand, model AS Model, "
+        "year AS Year, kms_driven AS 'Kms Driven', fuel_type AS 'Fuel Type', "
+        "transmission AS Transmission, owner AS Owner, mileage_kmpl AS 'Mileage (km/l)', "
+        "engine_cc AS 'Engine (cc)', city AS City, "
+        "accident_history AS 'Accident History', "
+        "predicted_price_lakh AS 'Predicted Price (Lakh)' "
+        "FROM predictions ORDER BY id DESC",
+        conn
+    )
+
+if history_df.empty:
+    st.info("No saved predictions yet. Predict a car price to start your history.")
+else:
+    st.metric("Total saved predictions", len(history_df))
+    st.dataframe(history_df, use_container_width=True, hide_index=True)
+    csv_history = history_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "⬇️ Download prediction history as CSV",
+        data=csv_history,
+        file_name="car_prediction_history.csv",
+        mime="text/csv"
+    )
+    if st.button("🗑️ Clear prediction history", type="secondary"):
+        with sqlite3.connect(history_db) as conn:
+            conn.execute("DELETE FROM predictions")
+            conn.commit()
+        st.success("Prediction history cleared. Refresh the page to update the table.")
+
+
+# =========================================================
+# FREE CAR PRICE CHATBOT
+# =========================================================
+
+import re
+
+st.markdown("---")
+st.header("💬 Car Price AI Assistant")
+
+st.caption(
+    "Ask questions about car prices, brands, budget, "
+    "dataset and model performance."
+)
+
+# Initialize chat history
+if "free_chat_history" not in st.session_state:
+    st.session_state.free_chat_history = []
+
+
+# ---------------------------------------------------------
+# CHATBOT RESPONSE FUNCTION
+# ---------------------------------------------------------
+
+def car_chatbot_reply(question):
+
+    q = question.lower().strip()
+
+    # Check required columns
+    required_columns = [
+        "Brand",
+        "Model",
+        "Present_Price_Lakh"
+    ]
+
+    for col in required_columns:
+        if col not in df.columns:
+            return f"Required dataset column '{col}' is missing."
+
+    # Clean price data
+    data = df.copy()
+
+    data["Present_Price_Lakh"] = pd.to_numeric(
+        data["Present_Price_Lakh"],
+        errors="coerce"
+    )
+
+    data = data.dropna(
+        subset=["Brand", "Model", "Present_Price_Lakh"]
+    )
+
+    if data.empty:
+        return "Sorry, valid car price data was not found."
+
+    brand_prices = (
+        data.groupby("Brand")["Present_Price_Lakh"]
+        .mean()
+        .sort_values()
+    )
+
+    # 1. Greeting
+    if any(word in q for word in [
+        "hello", "hi", "hey", "হ্যালো"
+    ]):
+        return (
+            "Hello! 👋 Welcome to Car Price Assistant.\n\n"
+            "You can ask me about car prices, brands, "
+            "budget, dataset and model performance."
+        )
+
+    # 2. Help
+    if "help" in q or "what can you do" in q:
+        return (
+            "I can help you with these questions:\n\n"
+            "- Which brand has the highest average price?\n"
+            "- Which brand has the lowest average price?\n"
+            "- Show cars under 10 lakh.\n"
+            "- Compare Maruti and Hyundai.\n"
+            "- What is the dataset size?\n"
+            "- What is the R2 score?\n"
+            "- What is the MAE?\n"
+            "- What is Random Forest?"
+        )
+
+    # 3. Dataset size
+    if any(word in q for word in [
+        "dataset size",
+        "how many rows",
+        "total cars",
+        "number of cars",
+        "dataset"
+    ]):
+        return (
+            f"📊 Dataset Information\n\n"
+            f"- Total records: {len(df)}\n"
+            f"- Total columns: {len(df.columns)}\n"
+            f"- Brands available: {data['Brand'].nunique()}\n"
+            f"- Car models available: {data['Model'].nunique()}"
+        )
+
+    # 4. Highest average price brand
+    if any(word in q for word in [
+        "highest price",
+        "most expensive brand",
+        "highest average",
+        "costliest brand",
+        "most costly"
+    ]):
+        brand = brand_prices.idxmax()
+        price = brand_prices.max()
+
+        return (
+            f"🏆 Highest Average Price Brand\n\n"
+            f"Brand: {brand}\n\n"
+            f"Average price: ₹{price:.2f} lakh"
+        )
+
+    # 5. Lowest average price brand
+    if any(word in q for word in [
+        "lowest price",
+        "cheapest brand",
+        "lowest average",
+        "least expensive"
+    ]):
+        brand = brand_prices.idxmin()
+        price = brand_prices.min()
+
+        return (
+            f"💰 Lowest Average Price Brand\n\n"
+            f"Brand: {brand}\n\n"
+            f"Average price: ₹{price:.2f} lakh"
+        )
+
+    # 6. Top 5 brands
+    if any(word in q for word in [
+        "top brands",
+        "top 5",
+        "brand ranking",
+        "rank brands"
+    ]):
+        top_brands = brand_prices.sort_values(
+            ascending=False
+        ).head(5)
+
+        result = "🏆 Top 5 Brands by Average Price\n\n"
+
+        for i, (brand, price) in enumerate(
+            top_brands.items(), start=1
+        ):
+            result += (
+                f"{i}. {brand}: ₹{price:.2f} lakh\n\n"
+            )
+
+        return result
+
+    # 7. Average car price
+    if "average price" in q or "mean price" in q:
+        avg_price = data["Present_Price_Lakh"].mean()
+
+        return (
+            f"📈 Average car price in the dataset: "
+            f"₹{avg_price:.2f} lakh"
+        )
+
+          # 8. Cars within a budget range
+    numbers = re.findall(r"\d+(?:\.\d+)?", q)
+
+    is_range = (
+        len(numbers) >= 2
+        and any(sep in q for sep in ["-", "to", "between"])
+    )
+
+    if is_range:
+        min_budget = float(numbers[0])
+        max_budget = float(numbers[1])
+
+        if "crore" in q:
+            min_budget *= 100
+            max_budget *= 100
+
+        filtered = data[
+            (data["Present_Price_Lakh"] >= min_budget)
+            & (data["Present_Price_Lakh"] <= max_budget)
+        ].copy()
+
+        title = f"Cars between {min_budget:g} and {max_budget:g} lakh"
+
+    elif any(word in q for word in [
+        "under", "below", "within budget",
+        "budget", "less than", "cheaper than",
+        "above", "over", "more than", "greater than"
+    ]):
+
+        if not numbers:
+            return "Please mention a budget, e.g. Show cars under 10 lakh."
+
+        budget = float(numbers[0])
+
+        if "crore" in q:
+            budget *= 100
+
+        is_above = any(word in q for word in [
+            "above", "over", "more than", "greater than"
+        ])
+
+        if is_above:
+            filtered = data[
+                data["Present_Price_Lakh"] > budget
+            ].copy()
+            title = f"Cars above {budget:g} lakh"
+        else:
+            filtered = data[
+                data["Present_Price_Lakh"] < budget
+            ].copy()
+            title = f"Cars under {budget:g} lakh"
+
+    else:
+        filtered = None
+
+    if filtered is not None:
+
+        filtered = filtered.drop_duplicates(
+            subset=["Brand", "Model"]
+        )
+
+        filtered = filtered.sort_values("Present_Price_Lakh")
+
+        if filtered.empty:
+            return f"No cars found: {title}"
+
+        result = (
+            f"🚗 **{title}**\n\n"
+            f"Total different car models: {len(filtered)}\n\n"
+        )
+
+        for _, row in filtered.iterrows():
+            result += (
+                f"- {row['Brand']} {row['Model']}: "
+                f"₹{row['Present_Price_Lakh']:.2f} lakh\n"
+            )
+
+        return result
+    # 9. Compare two brands
+    if "compare" in q or "comparison" in q:
+        available_brands = data["Brand"].dropna().unique()
+
+        mentioned_brands = [
+            brand for brand in available_brands
+            if str(brand).lower() in q
+        ]
+
+        # Remove duplicate matches
+        mentioned_brands = list(dict.fromkeys(
+            mentioned_brands
+        ))
+
+        if len(mentioned_brands) >= 2:
+            brand1 = mentioned_brands[0]
+            brand2 = mentioned_brands[1]
+
+            price1 = brand_prices.get(brand1)
+            price2 = brand_prices.get(brand2)
+
+            return (
+                f"⚖️ Brand Comparison\n\n"
+                f"**{brand1}**\n"
+                f"Average price: ₹{price1:.2f} lakh\n\n"
+                f"**{brand2}**\n"
+                f"Average price: ₹{price2:.2f} lakh\n\n"
+                f"Difference: ₹{abs(price1 - price2):.2f} lakh"
+            )
+
+        return (
+            "Please mention two brand names exactly as they "
+            "appear in your dataset.\n\n"
+            "Example: Compare Maruti and Hyundai."
+        )
+
+    # 10. Model evaluation: R2
+    if "r2" in q or "r²" in q or "r square" in q:
+        try:
+            return (
+                f"📊 Model R² Score: {r2:.4f}\n\n"
+                "R² measures how well the model explains "
+                "variation in car prices. A value closer "
+                "to 1 generally indicates a better fit."
+            )
+        except NameError:
+            return (
+                "R² score is not available. Please check "
+                "whether the model evaluation code ran successfully."
+            )
+
+    # 11. MAE
+    if "mae" in q or "mean absolute error" in q:
+        try:
+            return (
+                f"📉 Model MAE: {mae:.4f} lakh\n\n"
+                "MAE measures the average absolute difference "
+                "between actual and predicted prices."
+            )
+        except NameError:
+            return "MAE is not available in the current session."
+
+    # 12. Algorithm explanation
+    if any(word in q for word in [
+        "random forest",
+        "which algorithm",
+        "algorithm used",
+        "model used",
+        "machine learning model"
+    ]):
+        return (
+            "🌳 Algorithm: Random Forest Regressor\n\n"
+            "Random Forest combines predictions from multiple "
+            "decision trees to estimate car prices.\n\n"
+            "It can learn relationships between features such "
+            "as brand, year, mileage and engine capacity."
+        )
+
+    # 13. Available brands
+    if "list brands" in q or "available brands" in q:
+        brands = sorted(data["Brand"].dropna().unique())
+
+        return (
+            "🚘 Available Brands\n\n"
+            + ", ".join(map(str, brands))
+        )
+           # Search for a specific car model
+    search_query = q.strip().lower()
+
+    # Remove common search words
+    for word in [
+        "tell me about",
+        "search car",
+        "find car",
+        "show details of",
+        "details of",
+        "information about",
+        "info about",
+        "please",
+        "show",
+        "details",
+        "information",
+        "info",
+        "car"
+    ]:
+        search_query = search_query.replace(word, "")
+
+    search_query = search_query.strip()
+
+    if search_query:
+        matches = data[
+            data["Model"].astype(str).str.lower().str.contains(
+                re.escape(search_query),
+                na=False
+            )
+        ]
+
+        if not matches.empty:
+            matches = matches.drop_duplicates(
+                subset=["Brand", "Model"]
+            ).head(10)
+
+            result = "🚗 **Car Search Results**\n\n"
+
+            for _, row in matches.iterrows():
+                result += (
+                    f"### {row['Brand']} {row['Model']}\n"
+                    f"- Price: ₹{row['Present_Price_Lakh']:.2f} lakh\n"
+                )
+
+                for col in [
+                    "Year",
+                    "Fuel_Type",
+                    "Transmission",
+                    "Mileage_kmpl",
+                    "Engine_cc",
+                    "Kms_Driven"
+                ]:
+                    if col in row.index and pd.notna(row[col]):
+                        result += f"- {col}: {row[col]}\n"
+
+                result += "\n"
+
+            return result
+
+    # 14. Brand-specific average price
+    for brand in sorted(
+        data["Brand"].dropna().unique(),
+        key=lambda x: len(str(x)),
+        reverse=True
+    ):
+        if str(brand).lower() in q:
+            avg_price = brand_prices.get(brand)
+
+            if avg_price is not None:
+                return (
+                    f"🚗 Brand: {brand}\n\n"
+                    f"Average price: ₹{avg_price:.2f} lakh"
+                )
+
+    # 15. Unknown question
+    return (
+        "Sorry, I couldn't understand that question yet. 🤔\n\n"
+        "Try asking:\n"
+        "- Which brand has the highest average price?\n"
+        "- Show cars under 10 lakh.\n"
+        "- Compare two brands.\n"
+        "- What is the dataset size?\n"
+        "- What is the R2 score?\n"
+        "- What is the MAE?\n"
+        "- Which algorithm is used?"
+    )
+
+
+# ---------------------------------------------------------
+# CHAT INTERFACE
+# ---------------------------------------------------------
+
+# Display previous messages
+for message in st.session_state.free_chat_history:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+
+# User input
+user_question = st.chat_input(
+    "Ask something about car prices..."
+)
+
+if user_question:
+    # Save user message
+    st.session_state.free_chat_history.append({
+        "role": "user",
+        "content": user_question
+    })
+
+    # Generate answer
+    answer = car_chatbot_reply(user_question)
+
+    # Save assistant response
+    st.session_state.free_chat_history.append({
+        "role": "assistant",
+        "content": answer
+    })
+
+    # Refresh the page to display the new messages
+    st.rerun()
+
+
+# Clear chat button
+if st.button("🧹 Clear Chat"):
+    st.session_state.free_chat_history = []
+    st.rerun()
+
+
+st.caption(
+    "ℹ️ This is a free rule-based chatbot. "
+    "It does not use an external AI API, and its answers "
+    "are based on the loaded dataset and supported questions."
+)
