@@ -101,8 +101,9 @@ DATA_FILE = os.path.join(APP_DIR, "car_price_dataset_1500.csv")
 
 try:
     df = pd.read_csv(DATA_FILE)
+
 except Exception as e:
-  st.error(f"Error loading dataset: {e}") 
+    st.error(f"Error loading dataset: {e}")
     st.stop()
 
 
