@@ -31,24 +31,21 @@ st.write("Machine Learning Based Car Price Prediction")
 # CAR IMAGE FUNCTION
 # =========================================================
 
-def show_car_image(brand, model):
+def show_car_image(brand, model, year):
 
     st.subheader(f"🚘 {brand} {model}")
 
-    search_query = f"{brand} {model} car"
+    search_query = f'"{brand} {model}"'
 
     try:
         response = requests.get(
             "https://commons.wikimedia.org/w/api.php",
             params={
                 "action": "query",
-                "generator": "search",
-                "gsrsearch": search_query,
-                "gsrnamespace": 6,
-                "gsrlimit": 10,
-                "prop": "imageinfo",
-                "iiprop": "url",
-                "iiurlwidth": 700,
+                "list": "search",
+                "srsearch": f'intitle:{search_query}',
+                "srnamespace": 6,
+                "srlimit": 20,
                 "format": "json"
             },
             headers={
@@ -58,39 +55,70 @@ def show_car_image(brand, model):
         )
 
         response.raise_for_status()
-        data = response.json()
-        pages = data.get("query", {}).get("pages", {})
+
+        results = response.json().get(
+            "query", {}
+        ).get("search", [])
+
         image_url = None
 
-        for page in pages.values():
-            image_info = page.get("imageinfo", [])
+        for result in results:
 
-            if image_info:
-                image_url = image_info[0].get(
-                    "thumburl",
-                    image_info[0].get("url")
-                )
+            title = result.get("title", "").lower()
 
-                if image_url:
+            if brand.lower() not in title or model.lower() not in title:
+                continue
+
+            image_response = requests.get(
+                "https://commons.wikimedia.org/w/api.php",
+                params={
+                    "action": "query",
+                    "titles": result["title"],
+                    "prop": "imageinfo",
+                    "iiprop": "url",
+                    "iiurlwidth": 700,
+                    "format": "json"
+                },
+                headers={
+                    "User-Agent": "CarPricePredictionApp/1.0"
+                },
+                timeout=10
+            )
+
+            image_response.raise_for_status()
+
+            pages = image_response.json().get(
+                "query", {}
+            ).get("pages", {})
+
+            for page in pages.values():
+
+                image_info = page.get("imageinfo", [])
+
+                if image_info:
+                    image_url = image_info[0].get("thumburl")
                     break
 
+            if image_url:
+                break
+
         if image_url:
+
             st.image(
                 image_url,
                 caption=f"{brand} {model}",
                 use_container_width=True
             )
 
-            st.caption(
-                "⚠️ Illustrative Image: This may not be the actual model "
-                "or original photo of the selected car."
-            )
         else:
-            st.info("No image found for this car.")
+            st.info(
+                f"No matching image found for {brand} {model}."
+            )
 
     except requests.RequestException:
+
         st.warning(
-            "No image found for this car. Please check your internet connections."
+            "Unable to load car image. Please check your internet connection."
         )
 # =========================================================
 # LOAD DATASET
@@ -101,7 +129,6 @@ DATA_FILE = os.path.join(APP_DIR, "car_price_dataset_1500.csv")
 
 try:
     df = pd.read_csv(DATA_FILE)
-
 except Exception as e:
     st.error(f"Error loading dataset: {e}")
     st.stop()
@@ -151,8 +178,9 @@ missing_columns = [
 ]
 
 if missing_columns:
+
     st.error(
-        f"The following required columns are missing from the CSV: {missing_columns}"
+        f"Error: The following required columns are missing from the CSV file: {missing_columns}"
     )
 
     st.write("CSV columns:")
@@ -535,6 +563,8 @@ st.subheader(
 st.caption(
     "Some fields are pre-filled based on the dataset. You can modify them if needed."
 )
+
+
 if len(selected_car) > 0:
 
     car = selected_car.iloc[0]
@@ -838,7 +868,7 @@ if st.button(
         # Show selected car image
         show_car_image(
             selected_brand,
-            selected_model
+            selected_model, year_value
         )
 
     except Exception as e:
